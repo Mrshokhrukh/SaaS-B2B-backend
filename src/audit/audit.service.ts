@@ -3,11 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuditLog } from '../entities/audit-log.entity';
 
-interface AuditInput {
-  action: string;
-  resource: string;
+export interface AuditLogInput {
   userId?: string | null;
   businessId?: string | null;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
   ipAddress?: string | null;
   userAgent?: string | null;
   metadata?: Record<string, unknown> | null;
@@ -17,20 +18,42 @@ interface AuditInput {
 export class AuditService {
   constructor(
     @InjectRepository(AuditLog)
-    private readonly auditLogRepository: Repository<AuditLog>,
+    private readonly auditRepository: Repository<AuditLog>,
   ) {}
 
-  async create(input: AuditInput): Promise<void> {
-    const log = this.auditLogRepository.create({
-      action: input.action,
-      resource: input.resource,
+  async log(input: AuditLogInput): Promise<void> {
+    const entity = this.auditRepository.create({
       userId: input.userId ?? null,
       businessId: input.businessId ?? null,
+      action: input.action,
+      entityType: input.entityType,
+      entityId: input.entityId ?? null,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,
       metadata: input.metadata ?? null,
     });
 
-    await this.auditLogRepository.save(log);
+    await this.auditRepository.save(entity);
+  }
+
+  async listForBusiness(businessId: string, limit = 100): Promise<AuditLog[]> {
+    return this.auditRepository.find({
+      where: { businessId },
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
+  }
+
+  async listForEntity(
+    businessId: string,
+    entityType: string,
+    entityId: string,
+    limit = 100,
+  ): Promise<AuditLog[]> {
+    return this.auditRepository.find({
+      where: { businessId, entityType, entityId },
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
   }
 }

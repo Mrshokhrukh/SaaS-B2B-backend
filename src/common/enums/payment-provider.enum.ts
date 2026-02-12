@@ -1,3 +1,4 @@
 export enum PaymentProvider {
-  MOCK = 'MOCK',
+  MOCK_CLICK = 'MOCK_CLICK',
+  MOCK_PAYME = 'MOCK_PAYME',
 }

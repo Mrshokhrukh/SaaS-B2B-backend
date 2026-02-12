@@ -2,6 +2,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
@@ -10,6 +11,8 @@ import { Business } from './business.entity';
 import { User } from './user.entity';
 
 @Entity('audit_logs')
+@Index(['businessId', 'createdAt'])
+@Index(['userId', 'createdAt'])
 export class AuditLog {
   @PrimaryGeneratedColumn('increment')
   id: number;
@@ -17,32 +20,37 @@ export class AuditLog {
   @Column({ type: 'uuid', nullable: true })
   businessId: string | null;
 
-  @ManyToOne(() => Business, (business) => business.auditLogs, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'businessId' })
+  @ManyToOne(() => Business, (business) => business.auditLogs, {
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'business_id' })
   business: Business | null;
 
   @Column({ type: 'uuid', nullable: true })
   userId: string | null;
 
   @ManyToOne(() => User, (user) => user.auditLogs, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'userId' })
+  @JoinColumn({ name: 'user_id' })
   user: User | null;
 
-  @Column()
+  @Column({ length: 120 })
   action: string;
 
-  @Column()
-  resource: string;
+  @Column({ length: 80 })
+  entityType: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  entityId: string | null;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
   ipAddress: string | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'varchar', length: 256, nullable: true })
   userAgent: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
   metadata: Record<string, unknown> | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
-  timestamp: Date;
+  createdAt: Date;
 }

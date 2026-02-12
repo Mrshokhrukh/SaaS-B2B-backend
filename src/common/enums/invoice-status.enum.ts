@@ -1,6 +1,6 @@
 export enum InvoiceStatus {
-  DRAFT = 'DRAFT',
-  ISSUED = 'ISSUED',
+  PENDING = 'PENDING',
   PAID = 'PAID',
+  FAILED = 'FAILED',
   VOID = 'VOID',
 }

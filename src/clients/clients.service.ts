@@ -7,35 +7,39 @@ import { Client } from '../entities/client.entity';
 export class ClientsService {
   constructor(
     @InjectRepository(Client)
-    private readonly clientsRepository: Repository<Client>,
+    private readonly clientRepository: Repository<Client>,
   ) {}
 
-  async create(params: {
+  async findOrCreate(params: {
     businessId: string;
     fullName: string;
     email: string;
     phone?: string | null;
   }): Promise<Client> {
-    const client = this.clientsRepository.create({
+    const email = params.email.toLowerCase();
+
+    const existing = await this.clientRepository.findOne({
+      where: {
+        businessId: params.businessId,
+        email,
+      },
+    });
+
+    if (existing) {
+      if (params.phone && !existing.phone) {
+        existing.phone = params.phone;
+        return this.clientRepository.save(existing);
+      }
+      return existing;
+    }
+
+    const created = this.clientRepository.create({
       businessId: params.businessId,
       fullName: params.fullName,
-      email: params.email.toLowerCase(),
+      email,
       phone: params.phone ?? null,
     });
 
-    return this.clientsRepository.save(client);
-  }
-
-  async findById(id: string): Promise<Client | null> {
-    return this.clientsRepository.findOne({ where: { id } });
-  }
-
-  async findByBusinessAndEmail(businessId: string, email: string): Promise<Client | null> {
-    return this.clientsRepository.findOne({
-      where: {
-        businessId,
-        email: email.toLowerCase(),
-      },
-    });
+    return this.clientRepository.save(created);
   }
 }

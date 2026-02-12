@@ -9,20 +9,14 @@ import { Invoice } from '../entities/invoice.entity';
 export class InvoicesService {
   constructor(
     @InjectRepository(Invoice)
-    private readonly invoicesRepository: Repository<Invoice>,
+    private readonly invoiceRepository: Repository<Invoice>,
     @InjectRepository(Contract)
-    private readonly contractsRepository: Repository<Contract>,
+    private readonly contractRepository: Repository<Contract>,
   ) {}
 
-  async createForContract(params: {
-    businessId: string;
-    contractId: string;
-    amountCents: number;
-    currency: string;
-    dueDate?: Date;
-  }): Promise<Invoice> {
-    const contract = await this.contractsRepository.findOne({
-      where: { id: params.contractId, businessId: params.businessId },
+  async createForSignedContract(contractId: string): Promise<Invoice> {
+    const contract = await this.contractRepository.findOne({
+      where: { id: contractId },
       relations: { invoice: true },
     });
 
@@ -31,37 +25,36 @@ export class InvoicesService {
     }
 
     if (contract.invoice) {
-      throw new BadRequestException('Invoice already exists for contract');
+      return contract.invoice;
     }
 
-    const invoice = this.invoicesRepository.create({
+    const invoice = this.invoiceRepository.create({
+      businessId: contract.businessId,
       contractId: contract.id,
-      amountCents: params.amountCents,
-      currency: params.currency.toUpperCase(),
-      invoiceNumber: this.generateInvoiceNumber(),
-      status: InvoiceStatus.ISSUED,
-      dueDate: params.dueDate ?? null,
-      issuedAt: new Date(),
+      invoiceNumber: `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      amountCents: contract.amountCents,
+      currency: contract.currency,
+      status: InvoiceStatus.PENDING,
+      dueAt: null,
     });
 
-    return this.invoicesRepository.save(invoice);
+    return this.invoiceRepository.save(invoice);
   }
 
-  async findById(invoiceId: string): Promise<Invoice | null> {
-    return this.invoicesRepository.findOne({
-      where: { id: invoiceId },
-      relations: { contract: true, payments: true },
+  async findByIdForBusiness(
+    invoiceId: string,
+    businessId: string,
+  ): Promise<Invoice | null> {
+    return this.invoiceRepository.findOne({
+      where: { id: invoiceId, businessId },
+      relations: { contract: true },
     });
   }
 
   async markPaid(invoiceId: string): Promise<void> {
-    await this.invoicesRepository.update(invoiceId, {
+    await this.invoiceRepository.update(invoiceId, {
       status: InvoiceStatus.PAID,
       paidAt: new Date(),
     });
-  }
-
-  private generateInvoiceNumber(): string {
-    return `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   }
 }

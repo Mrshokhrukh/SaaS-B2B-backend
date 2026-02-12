@@ -4,9 +4,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { randomUUID, timingSafeEqual } from 'crypto';
 import { Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { ContractStatus } from '../common/enums/contract-status.enum';
@@ -17,38 +15,38 @@ import { RequestUser } from '../common/types/request-user.type';
 import { Contract } from '../entities/contract.entity';
 import { Invoice } from '../entities/invoice.entity';
 import { Payment } from '../entities/payment.entity';
-import { InvoicesService } from '../invoices/invoices.service';
-import { ContractsService } from '../contracts/contracts.service';
-import { CreateCheckoutDto } from './dto/create-checkout.dto';
-import { MockWebhookDto } from './dto/mock-webhook.dto';
+import { CreatePaymentIntentDto } from './dto/create-payment-intent.dto';
+import { WebhookDto } from './dto/webhook.dto';
+import { MockClickProvider } from './providers/mock-click.provider';
+import { MockPaymeProvider } from './providers/mock-payme.provider';
+import { PaymentProviderAdapter } from './providers/provider.interface';
 
 @Injectable()
 export class PaymentsService {
   constructor(
     @InjectRepository(Payment)
-    private readonly paymentsRepository: Repository<Payment>,
+    private readonly paymentRepository: Repository<Payment>,
     @InjectRepository(Invoice)
-    private readonly invoicesRepository: Repository<Invoice>,
+    private readonly invoiceRepository: Repository<Invoice>,
     @InjectRepository(Contract)
-    private readonly contractsRepository: Repository<Contract>,
-    private readonly configService: ConfigService,
-    private readonly invoicesService: InvoicesService,
-    private readonly contractsService: ContractsService,
+    private readonly contractRepository: Repository<Contract>,
+    private readonly clickProvider: MockClickProvider,
+    private readonly paymeProvider: MockPaymeProvider,
     private readonly auditService: AuditService,
   ) {}
 
-  async createCheckout(
+  async createIntent(
     user: RequestUser,
     invoiceId: string,
-    dto: CreateCheckoutDto,
-    ipAddress?: string,
-  ): Promise<{ checkoutUrl: string; providerPaymentId: string; paymentId: string }> {
-    const invoice = await this.invoicesRepository.findOne({
-      where: { id: invoiceId },
+    dto: CreatePaymentIntentDto,
+    ipAddress: string,
+  ): Promise<Payment> {
+    const invoice = await this.invoiceRepository.findOne({
+      where: { id: invoiceId, businessId: user.businessId },
       relations: { contract: true },
     });
 
-    if (!invoice || invoice.contract.businessId !== user.businessId) {
+    if (!invoice) {
       throw new NotFoundException('Invoice not found');
     }
 
@@ -56,52 +54,58 @@ export class PaymentsService {
       throw new BadRequestException('Invoice already paid');
     }
 
-    const provider = dto.provider ?? PaymentProvider.MOCK;
-    const providerPaymentId = `mock_${randomUUID()}`;
+    const payment = await this.paymentRepository.save(
+      this.paymentRepository.create({
+        businessId: invoice.businessId,
+        invoiceId: invoice.id,
+        provider: dto.provider,
+        providerPaymentId: '',
+        amountCents: invoice.amountCents,
+        currency: invoice.currency,
+        status: PaymentStatus.INITIATED,
+      }),
+    );
 
-    const payment = this.paymentsRepository.create({
-      invoiceId: invoice.id,
-      provider,
-      providerPaymentId,
-      amountCents: invoice.amountCents,
-      currency: invoice.currency,
-      status: PaymentStatus.INITIATED,
-      providerResponse: {
-        checkoutUrl: `https://mock-payments.local/checkout/${providerPaymentId}`,
-      },
+    const provider = this.resolveProvider(dto.provider);
+    const intent = await provider.createIntent({
+      paymentId: payment.id,
+      amountCents: payment.amountCents,
+      currency: payment.currency,
+      invoiceNumber: invoice.invoiceNumber,
     });
 
-    const savedPayment = await this.paymentsRepository.save(payment);
+    payment.providerPaymentId = intent.providerPaymentId;
+    payment.checkoutUrl = intent.checkoutUrl;
+    payment.providerPayload = intent.payload;
 
-    await this.auditService.create({
-      action: 'PAYMENT_CHECKOUT_CREATED',
-      resource: `payment:${savedPayment.id}`,
-      userId: user.sub,
+    const saved = await this.paymentRepository.save(payment);
+
+    await this.auditService.log({
+      userId: user.userId,
       businessId: user.businessId,
-      ipAddress: ipAddress ?? null,
-      metadata: {
-        invoiceId,
-        providerPaymentId,
-        amountCents: savedPayment.amountCents,
-      },
+      action: 'PAYMENT_INTENT_CREATE',
+      entityType: 'payment',
+      entityId: saved.id,
+      ipAddress,
     });
 
-    return {
-      paymentId: savedPayment.id,
-      providerPaymentId,
-      checkoutUrl: `https://mock-payments.local/checkout/${providerPaymentId}`,
-    };
+    return saved;
   }
 
-  async handleMockWebhook(
-    dto: MockWebhookDto,
-    webhookSecret: string | undefined,
-    ipAddress?: string,
-  ): Promise<{ ok: true }> {
-    this.verifyWebhookSecret(webhookSecret);
+  async handleWebhook(
+    provider: PaymentProvider,
+    dto: WebhookDto,
+    signature: string | undefined,
+    ipAddress: string,
+  ): Promise<{ success: true }> {
+    const adapter = this.resolveProvider(provider);
 
-    const payment = await this.paymentsRepository.findOne({
-      where: { providerPaymentId: dto.providerPaymentId },
+    if (!signature || !adapter.verifySignature(dto, signature)) {
+      throw new UnauthorizedException('Invalid webhook signature');
+    }
+
+    const payment = await this.paymentRepository.findOne({
+      where: { provider, providerPaymentId: dto.providerPaymentId },
       relations: { invoice: { contract: true } },
     });
 
@@ -110,64 +114,61 @@ export class PaymentsService {
     }
 
     payment.status = dto.status;
-    payment.providerResponse = {
-      ...(payment.providerResponse ?? {}),
-      webhookStatus: dto.status,
-      receivedAt: new Date().toISOString(),
+    payment.webhookVerifiedAt = new Date();
+    payment.providerPayload = {
+      ...(payment.providerPayload ?? {}),
+      webhook: dto,
     };
 
     if (dto.status === PaymentStatus.SUCCEEDED) {
       payment.paidAt = new Date();
-      await this.invoicesService.markPaid(payment.invoiceId);
-      await this.contractsService.markContractPaid(payment.invoice.contractId);
+
+      await this.invoiceRepository.update(payment.invoiceId, {
+        status: InvoiceStatus.PAID,
+        paidAt: new Date(),
+      });
+
+      await this.contractRepository.update(payment.invoice.contractId, {
+        status: ContractStatus.PAID,
+      });
     }
 
-    await this.paymentsRepository.save(payment);
+    await this.paymentRepository.save(payment);
 
-    await this.auditService.create({
-      action: 'PAYMENT_WEBHOOK_PROCESSED',
-      resource: `payment:${payment.id}`,
-      businessId: payment.invoice.contract.businessId,
-      ipAddress: ipAddress ?? null,
-      metadata: {
-        providerPaymentId: payment.providerPaymentId,
-        status: payment.status,
-      },
+    await this.auditService.log({
+      businessId: payment.businessId,
+      action: 'PAYMENT_WEBHOOK',
+      entityType: 'payment',
+      entityId: payment.id,
+      ipAddress,
+      metadata: { provider, status: dto.status },
     });
 
-    return { ok: true };
+    return { success: true };
   }
 
-  async getPaymentById(user: RequestUser, paymentId: string): Promise<Payment> {
-    const payment = await this.paymentsRepository.findOne({
-      where: { id: paymentId },
-      relations: { invoice: { contract: true } },
+  async getPayment(user: RequestUser, paymentId: string): Promise<Payment> {
+    const payment = await this.paymentRepository.findOne({
+      where: { id: paymentId, businessId: user.businessId },
+      relations: { invoice: true },
     });
 
-    if (!payment || payment.invoice.contract.businessId !== user.businessId) {
+    if (!payment) {
       throw new NotFoundException('Payment not found');
     }
 
     return payment;
   }
 
-  private verifyWebhookSecret(incomingSecret?: string): void {
-    const configuredSecret = this.configService.get<string>('webhook.mockProviderSecret', {
-      infer: true,
-    });
-
-    if (!incomingSecret || !configuredSecret) {
-      throw new UnauthorizedException('Invalid webhook secret');
+  private resolveProvider(provider: PaymentProvider): PaymentProviderAdapter {
+    if (provider === PaymentProvider.MOCK_CLICK) {
+      return this.clickProvider;
     }
 
-    const incomingBuffer = Buffer.from(incomingSecret);
-    const configuredBuffer = Buffer.from(configuredSecret);
-
-    if (
-      incomingBuffer.length !== configuredBuffer.length ||
-      !timingSafeEqual(incomingBuffer, configuredBuffer)
-    ) {
-      throw new UnauthorizedException('Invalid webhook secret');
+    if (provider === PaymentProvider.MOCK_PAYME) {
+      return this.paymeProvider;
     }
+
+    throw new BadRequestException('Unsupported provider');
   }
 }

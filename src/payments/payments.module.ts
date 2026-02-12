@@ -4,19 +4,17 @@ import { AuditModule } from '../audit/audit.module';
 import { Contract } from '../entities/contract.entity';
 import { Invoice } from '../entities/invoice.entity';
 import { Payment } from '../entities/payment.entity';
-import { InvoicesModule } from '../invoices/invoices.module';
-import { ContractsModule } from '../contracts/contracts.module';
+import { MockClickProvider } from './providers/mock-click.provider';
+import { MockPaymeProvider } from './providers/mock-payme.provider';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Payment, Invoice, Contract]),
-    InvoicesModule,
-    ContractsModule,
     AuditModule,
   ],
+  providers: [PaymentsService, MockClickProvider, MockPaymeProvider],
   controllers: [PaymentsController],
-  providers: [PaymentsService],
 })
 export class PaymentsModule {}

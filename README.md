@@ -1,98 +1,172 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Contract Platform API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+## Folder Structure
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
-
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```text
+api/
+  src/
+    app.module.ts
+    main.ts
+    common/
+      decorators/
+      enums/
+      filters/
+      guards/
+      interceptors/
+      types/
+      utils/
+    config/
+      configuration.ts
+      validation.ts
+    database/
+      data-source.ts
+      database.module.ts
+      migrations/
+      seeds/
+    redis/
+      redis.constants.ts
+      redis.module.ts
+      redis.service.ts
+    entities/
+      audit-log.entity.ts
+      business.entity.ts
+      client.entity.ts
+      contract-template.entity.ts
+      contract.entity.ts
+      invoice.entity.ts
+      payment.entity.ts
+      user.entity.ts
+    audit/
+      audit.module.ts
+      audit.service.ts
+    auth/
+      auth.module.ts
+      auth.controller.ts
+      auth.service.ts
+      dto/
+      guards/
+      strategies/
+    business/
+      business.module.ts
+      business.service.ts
+    users/
+      users.module.ts
+      users.service.ts
+      dto/
+    clients/
+      clients.module.ts
+      clients.service.ts
+    contracts/
+      contracts.module.ts
+      contracts.controller.ts
+      contracts.service.ts
+      dto/
+    invoices/
+      invoices.module.ts
+      invoices.service.ts
+    payments/
+      payments.module.ts
+      payments.controller.ts
+      payments.service.ts
+      dto/
+      providers/
+    health/
+      health.module.ts
+      health.controller.ts
+  Dockerfile
+  docker-compose.yml
+  .env.example
+  package.json
 ```
 
-## Compile and run the project
+## Run Locally
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+cp .env.example .env
+npm install
+npm run migration:run
+npm run seed
+npm run start:dev
 ```
 
-## Run tests
+API base URL:
+
+```text
+http://localhost:3000/api/v1
+```
+
+## Run With Docker
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+cp .env.example .env
+docker compose up --build
 ```
 
-## Deployment
+## Environment Variables
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+```text
+NODE_ENV
+APP_NAME
+PORT
+API_PREFIX
+CORS_ORIGIN
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+DB_HOST
+DB_PORT
+DB_USER
+DB_PASSWORD
+DB_NAME
+DB_SSL
+DB_MIGRATIONS_RUN
+DB_LOGGING
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+REDIS_HOST
+REDIS_PORT
+REDIS_PASSWORD
+REDIS_TLS
+
+JWT_ACCESS_SECRET
+JWT_REFRESH_SECRET
+JWT_ACCESS_TTL
+JWT_REFRESH_TTL
+
+OTP_TTL_SECONDS
+RATE_LIMIT_WINDOW_SECONDS
+RATE_LIMIT_MAX_REQUESTS
+PUBLIC_LINK_CACHE_TTL_SECONDS
+PUBLIC_CONTRACT_BASE_URL
+
+MOCK_CLICK_WEBHOOK_SECRET
+MOCK_PAYME_WEBHOOK_SECRET
+SIGNED_CONTRACTS_DIR
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Main Routes
 
-## Resources
+```text
+POST   /api/v1/auth/register
+POST   /api/v1/auth/login
+POST   /api/v1/auth/refresh
+POST   /api/v1/auth/logout
+POST   /api/v1/auth/staff
+GET    /api/v1/auth/me
+POST   /api/v1/auth/me/audit
 
-Check out a few resources that may come in handy when working with NestJS:
+POST   /api/v1/templates
+GET    /api/v1/templates
+GET    /api/v1/contracts
+POST   /api/v1/contracts
+POST   /api/v1/contracts/:id/send-link
+GET    /api/v1/contracts/:id
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+GET    /api/v1/public/contracts/:token
+POST   /api/v1/public/contracts/:token/otp/request
+POST   /api/v1/public/contracts/:token/otp/verify
 
-## Support
+POST   /api/v1/payments/invoices/:invoiceId/intents
+POST   /api/v1/payments/webhooks/:provider
+GET    /api/v1/payments/:id
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+GET    /api/v1/health
+GET    /api/docs
+```

@@ -4,243 +4,312 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash, randomInt, randomUUID, timingSafeEqual } from 'crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'crypto';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { ContractStatus } from '../common/enums/contract-status.enum';
 import { RequestUser } from '../common/types/request-user.type';
+import { createBasicPdf } from '../common/utils/pdf.util';
+import { generateOtpCode } from '../common/utils/otp.util';
 import { ClientsService } from '../clients/clients.service';
 import { Contract } from '../entities/contract.entity';
+import { ContractTemplate } from '../entities/contract-template.entity';
 import { InvoicesService } from '../invoices/invoices.service';
 import { RedisService } from '../redis/redis.service';
 import { CreateContractDto } from './dto/create-contract.dto';
-import { CreateInvoiceDto } from './dto/create-invoice.dto';
-import { RequestSignOtpDto } from './dto/request-sign-otp.dto';
-import { VerifySignatureDto } from './dto/verify-signature.dto';
+import { CreateTemplateDto } from './dto/create-template.dto';
+import { RequestOtpDto } from './dto/request-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
 
-interface OtpRecord {
+interface OtpPayload {
   phone: string;
-  otpHash: string;
-  expiresAt: string;
+  codeHash: string;
 }
 
 @Injectable()
 export class ContractsService {
   constructor(
+    @InjectRepository(ContractTemplate)
+    private readonly templateRepository: Repository<ContractTemplate>,
     @InjectRepository(Contract)
-    private readonly contractsRepository: Repository<Contract>,
+    private readonly contractRepository: Repository<Contract>,
     private readonly clientsService: ClientsService,
-    private readonly invoicesService: InvoicesService,
     private readonly redisService: RedisService,
     private readonly auditService: AuditService,
+    private readonly invoicesService: InvoicesService,
+    private readonly configService: ConfigService,
   ) {}
 
-  async createContract(user: RequestUser, dto: CreateContractDto, ipAddress?: string): Promise<Contract> {
-    const existingClient = await this.clientsService.findByBusinessAndEmail(
-      user.businessId,
-      dto.clientEmail,
-    );
-
-    const client =
-      existingClient ??
-      (await this.clientsService.create({
-        businessId: user.businessId,
-        fullName: dto.clientName,
-        email: dto.clientEmail,
-        phone: dto.clientPhone,
-      }));
-
-    const contract = this.contractsRepository.create({
+  async createTemplate(
+    user: RequestUser,
+    dto: CreateTemplateDto,
+    ip: string,
+  ): Promise<ContractTemplate> {
+    const template = this.templateRepository.create({
       businessId: user.businessId,
-      clientId: client.id,
-      title: dto.title,
-      templateName: dto.templateName,
-      content: dto.content,
-      linkToken: randomUUID(),
-      status: ContractStatus.DRAFT,
+      name: dto.name,
+      body: dto.body,
+      version: 1,
+      isActive: true,
     });
 
-    const savedContract = await this.contractsRepository.save(contract);
-
-    await this.auditService.create({
-      action: 'CONTRACT_CREATED',
-      resource: `contract:${savedContract.id}`,
-      userId: user.sub,
+    const saved = await this.templateRepository.save(template);
+    await this.auditService.log({
+      userId: user.userId,
       businessId: user.businessId,
-      ipAddress: ipAddress ?? null,
-      metadata: {
-        templateName: savedContract.templateName,
-        clientId: client.id,
+      action: 'TEMPLATE_CREATE',
+      entityType: 'contract_template',
+      entityId: saved.id,
+      ipAddress: ip,
+    });
+
+    return saved;
+  }
+
+  async listTemplates(user: RequestUser): Promise<ContractTemplate[]> {
+    return this.templateRepository.find({
+      where: { businessId: user.businessId, isActive: true },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async listContracts(user: RequestUser): Promise<Contract[]> {
+    return this.contractRepository.find({
+      where: { businessId: user.businessId },
+      relations: { client: true, invoice: true, template: true },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async createContract(
+    user: RequestUser,
+    dto: CreateContractDto,
+    ip: string,
+  ): Promise<Contract> {
+    const template = await this.templateRepository.findOne({
+      where: {
+        id: dto.templateId,
+        businessId: user.businessId,
+        isActive: true,
       },
     });
 
-    return savedContract;
+    if (!template) {
+      throw new NotFoundException('Template not found');
+    }
+
+    const client = await this.clientsService.findOrCreate({
+      businessId: user.businessId,
+      fullName: dto.clientName,
+      email: dto.clientEmail,
+      phone: dto.clientPhone,
+    });
+
+    const renderedBody = template.body
+      .replace(/{{client_name}}/g, client.fullName)
+      .replace(/{{business_name}}/g, user.businessId)
+      .replace(/{{amount}}/g, String(dto.amountCents / 100))
+      .replace(/{{currency}}/g, dto.currency.toUpperCase());
+
+    const contract = this.contractRepository.create({
+      businessId: user.businessId,
+      clientId: client.id,
+      templateId: template.id,
+      createdByUserId: user.userId,
+      title: dto.title,
+      renderedBody,
+      publicToken:
+        randomUUID().replace(/-/g, '') +
+        randomUUID().replace(/-/g, '').slice(0, 16),
+      status: ContractStatus.CREATED,
+      contractNumber: `CTR-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      amountCents: dto.amountCents,
+      currency: dto.currency.toUpperCase(),
+    });
+
+    const saved = await this.contractRepository.save(contract);
+
+    await this.auditService.log({
+      userId: user.userId,
+      businessId: user.businessId,
+      action: 'CONTRACT_CREATE',
+      entityType: 'contract',
+      entityId: saved.id,
+      ipAddress: ip,
+    });
+
+    return saved;
   }
 
-  async sendContractLink(user: RequestUser, contractId: string, ipAddress?: string): Promise<{ link: string }> {
-    const contract = await this.findBusinessContract(user.businessId, contractId);
+  async sendLink(
+    user: RequestUser,
+    contractId: string,
+    ip: string,
+  ): Promise<{ publicLink: string }> {
+    const contract = await this.contractRepository.findOne({
+      where: { id: contractId, businessId: user.businessId },
+    });
 
-    if (contract.status === ContractStatus.SIGNED || contract.status === ContractStatus.PAID) {
-      throw new BadRequestException('Signed or paid contracts cannot be resent');
+    if (!contract) {
+      throw new NotFoundException('Contract not found');
     }
 
     contract.status = ContractStatus.SENT;
     contract.sentAt = new Date();
+    await this.contractRepository.save(contract);
 
-    await this.contractsRepository.save(contract);
+    const baseUrl = this.configService.get<string>('publicLinks.baseUrl') ?? '';
+    const publicLinkTtl =
+      this.configService.get<number>('publicLinks.ttlSeconds') ?? 86400;
+    const link = `${baseUrl}/${contract.publicToken}`;
 
-    const link = `${process.env.PUBLIC_CONTRACT_BASE_URL ?? 'https://app.local/contracts'}/${contract.linkToken}`;
+    await this.redisService.set(
+      `public:contract:${contract.publicToken}`,
+      JSON.stringify({ id: contract.id }),
+      publicLinkTtl,
+    );
 
-    await this.auditService.create({
-      action: 'CONTRACT_LINK_SENT',
-      resource: `contract:${contract.id}`,
-      userId: user.sub,
+    await this.auditService.log({
+      userId: user.userId,
       businessId: user.businessId,
-      ipAddress: ipAddress ?? null,
+      action: 'CONTRACT_SEND_LINK',
+      entityType: 'contract',
+      entityId: contract.id,
+      ipAddress: ip,
       metadata: { link },
     });
 
-    return { link };
+    return { publicLink: link };
   }
 
-  async viewPublicContract(token: string, ipAddress?: string): Promise<Contract> {
-    const contract = await this.contractsRepository.findOne({
-      where: { linkToken: token },
-      relations: { client: true, invoice: true },
-    });
+  async publicView(publicToken: string, ip: string): Promise<Contract> {
+    let contract = await this.findByPublicToken(publicToken);
 
-    if (!contract) {
-      throw new NotFoundException('Contract not found');
-    }
-
-    if (contract.status === ContractStatus.SENT) {
+    if (
+      contract.status === ContractStatus.SENT ||
+      contract.status === ContractStatus.CREATED
+    ) {
       contract.status = ContractStatus.VIEWED;
       contract.viewedAt = new Date();
-      await this.contractsRepository.save(contract);
-
-      await this.auditService.create({
-        action: 'CONTRACT_VIEWED',
-        resource: `contract:${contract.id}`,
-        businessId: contract.businessId,
-        ipAddress: ipAddress ?? null,
-      });
+      contract.viewerIp = ip;
+      contract = await this.contractRepository.save(contract);
     }
+
+    await this.auditService.log({
+      businessId: contract.businessId,
+      action: 'CONTRACT_VIEW',
+      entityType: 'contract',
+      entityId: contract.id,
+      ipAddress: ip,
+    });
 
     return contract;
   }
 
-  async requestOtp(token: string, dto: RequestSignOtpDto, ipAddress?: string): Promise<{ expiresInSeconds: number }> {
-    const contract = await this.contractsRepository.findOne({ where: { linkToken: token } });
+  async requestOtp(
+    publicToken: string,
+    dto: RequestOtpDto,
+    ip: string,
+  ): Promise<{ expiresIn: number }> {
+    const contract = await this.findByPublicToken(publicToken);
 
-    if (!contract) {
-      throw new NotFoundException('Contract not found');
+    if (
+      ![ContractStatus.SENT, ContractStatus.VIEWED].includes(contract.status)
+    ) {
+      throw new BadRequestException(
+        'Contract cannot be signed in current state',
+      );
     }
 
-    if (![ContractStatus.SENT, ContractStatus.VIEWED].includes(contract.status)) {
-      throw new BadRequestException('Contract is not available for signature');
-    }
+    const code = generateOtpCode();
+    const ttl = this.configService.get<number>('otp.ttlSeconds') ?? 300;
 
-    const otpCode = `${randomInt(100000, 999999)}`;
-    const otpHash = this.hashOtp(otpCode);
-    const expiresInSeconds = 300;
-
-    const payload: OtpRecord = {
+    const payload: OtpPayload = {
       phone: dto.phone,
-      otpHash,
-      expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
+      codeHash: this.hashOtp(code),
     };
 
-    await this.redisService.set(this.otpKey(contract.id), JSON.stringify(payload), expiresInSeconds);
+    await this.redisService.set(
+      this.otpKey(contract.id),
+      JSON.stringify(payload),
+      ttl,
+    );
 
-    await this.auditService.create({
-      action: 'CONTRACT_OTP_REQUESTED',
-      resource: `contract:${contract.id}`,
+    await this.auditService.log({
       businessId: contract.businessId,
-      ipAddress: ipAddress ?? null,
-      metadata: { phone: dto.phone },
+      action: 'CONTRACT_OTP_REQUEST',
+      entityType: 'contract',
+      entityId: contract.id,
+      ipAddress: ip,
+      metadata: {
+        phone: dto.phone,
+        mockOtpCode: code,
+      },
     });
 
-    return { expiresInSeconds };
+    return { expiresIn: ttl };
   }
 
-  async signContract(token: string, dto: VerifySignatureDto, ipAddress?: string): Promise<Contract> {
-    const contract = await this.contractsRepository.findOne({ where: { linkToken: token } });
+  async verifyOtpAndSign(
+    publicToken: string,
+    dto: VerifyOtpDto,
+    ip: string,
+  ): Promise<Contract> {
+    const contract = await this.findByPublicToken(publicToken);
 
-    if (!contract) {
-      throw new NotFoundException('Contract not found');
-    }
-
-    const otpRecordRaw = await this.redisService.get(this.otpKey(contract.id));
-    if (!otpRecordRaw) {
+    const rawOtp = await this.redisService.get(this.otpKey(contract.id));
+    if (!rawOtp) {
       throw new UnauthorizedException('OTP expired or missing');
     }
 
-    const otpRecord = JSON.parse(otpRecordRaw) as OtpRecord;
-    const incomingHash = this.hashOtp(dto.otpCode);
+    const otp = JSON.parse(rawOtp) as OtpPayload;
+    const codeHash = this.hashOtp(dto.code);
 
-    const isValid = timingSafeEqual(Buffer.from(otpRecord.otpHash), Buffer.from(incomingHash));
-    if (!isValid) {
+    const valid = timingSafeEqual(
+      Buffer.from(otp.codeHash),
+      Buffer.from(codeHash),
+    );
+    if (!valid) {
       throw new UnauthorizedException('Invalid OTP code');
     }
 
     contract.status = ContractStatus.SIGNED;
     contract.signedAt = new Date();
-    contract.signedIp = ipAddress ?? null;
-    contract.signerPhone = otpRecord.phone;
+    contract.signedIp = ip;
 
-    const signedContract = await this.contractsRepository.save(contract);
+    const path = await this.persistSignedPdf(contract);
+    contract.signedPdfPath = path;
+
+    const signed = await this.contractRepository.save(contract);
     await this.redisService.del(this.otpKey(contract.id));
 
-    await this.auditService.create({
-      action: 'CONTRACT_SIGNED',
-      resource: `contract:${contract.id}`,
-      businessId: contract.businessId,
-      ipAddress: ipAddress ?? null,
+    await this.invoicesService.createForSignedContract(signed.id);
+
+    await this.auditService.log({
+      businessId: signed.businessId,
+      action: 'CONTRACT_SIGN',
+      entityType: 'contract',
+      entityId: signed.id,
+      ipAddress: ip,
       metadata: {
         signerName: dto.signerName,
-        phone: otpRecord.phone,
       },
     });
 
-    return signedContract;
+    return signed;
   }
 
-  async createInvoice(user: RequestUser, contractId: string, dto: CreateInvoiceDto, ipAddress?: string) {
-    const invoice = await this.invoicesService.createForContract({
-      businessId: user.businessId,
-      contractId,
-      amountCents: dto.amountCents,
-      currency: dto.currency,
-      dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-    });
-
-    await this.auditService.create({
-      action: 'INVOICE_CREATED',
-      resource: `invoice:${invoice.id}`,
-      userId: user.sub,
-      businessId: user.businessId,
-      ipAddress: ipAddress ?? null,
-      metadata: { contractId, amountCents: invoice.amountCents },
-    });
-
-    return invoice;
-  }
-
-  async getContractStatus(user: RequestUser, contractId: string): Promise<Contract> {
-    return this.findBusinessContract(user.businessId, contractId);
-  }
-
-  async markContractPaid(contractId: string): Promise<void> {
-    await this.contractsRepository.update(contractId, {
-      status: ContractStatus.PAID,
-    });
-  }
-
-  private async findBusinessContract(businessId: string, contractId: string): Promise<Contract> {
-    const contract = await this.contractsRepository.findOne({
-      where: { id: contractId, businessId },
-      relations: { client: true, invoice: true },
+  async getBusinessContract(
+    user: RequestUser,
+    contractId: string,
+  ): Promise<Contract> {
+    const contract = await this.contractRepository.findOne({
+      where: { id: contractId, businessId: user.businessId },
+      relations: { client: true, invoice: true, template: true },
     });
 
     if (!contract) {
@@ -250,13 +319,61 @@ export class ContractsService {
     return contract;
   }
 
+  private async findByPublicToken(publicToken: string): Promise<Contract> {
+    const cached = await this.redisService.get(
+      `public:contract:${publicToken}`,
+    );
+    if (cached) {
+      const parsed = JSON.parse(cached) as { id: string };
+      const contract = await this.contractRepository.findOne({
+        where: { id: parsed.id },
+      });
+      if (contract) {
+        return contract;
+      }
+    }
+
+    const contract = await this.contractRepository.findOne({
+      where: { publicToken },
+      relations: { client: true, template: true },
+    });
+
+    if (!contract) {
+      throw new NotFoundException('Contract not found');
+    }
+
+    await this.redisService.set(
+      `public:contract:${publicToken}`,
+      JSON.stringify({ id: contract.id }),
+      this.configService.get<number>('publicLinks.ttlSeconds') ?? 86400,
+    );
+
+    return contract;
+  }
+
   private otpKey(contractId: string): string {
-    return `contract:otp:${contractId}`;
+    return `otp:contract:${contractId}`;
   }
 
   private hashOtp(code: string): string {
-    return createHash('sha256')
-      .update(`${code}:${process.env.JWT_SECRET ?? 'otp-pepper'}`)
-      .digest('hex');
+    const secret = this.configService.get<string>('auth.accessSecret') ?? 'otp';
+    return createHash('sha256').update(`${code}:${secret}`).digest('hex');
+  }
+
+  private async persistSignedPdf(contract: Contract): Promise<string> {
+    const directory =
+      this.configService.get<string>('storage.signedContractsPath') ??
+      'storage/signed-contracts';
+    await mkdir(directory, { recursive: true });
+
+    const fileName = `${contract.id}.pdf`;
+    const fullPath = join(directory, fileName);
+
+    const pdf = createBasicPdf(
+      `Contract ${contract.contractNumber} signed at ${new Date().toISOString()}`,
+    );
+    await writeFile(fullPath, pdf);
+
+    return fullPath;
   }
 }

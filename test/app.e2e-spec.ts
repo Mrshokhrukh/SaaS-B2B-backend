@@ -1,25 +1,36 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
-import request from 'supertest';
-import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+import { DataSource } from 'typeorm';
+import { HealthController } from '../src/health/health.controller';
+import { RedisService } from '../src/redis/redis.service';
 
-describe('AppController (e2e)', () => {
-  let app: INestApplication<App>;
+describe('Health (e2e)', () => {
+  let controller: HealthController;
 
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
+      controllers: [HealthController],
+      providers: [
+        {
+          provide: DataSource,
+          useValue: {
+            query: jest.fn().mockResolvedValue([{ ok: 1 }]),
+          },
+        },
+        {
+          provide: RedisService,
+          useValue: {
+            ping: jest.fn().mockResolvedValue('PONG'),
+          },
+        },
+      ],
     }).compile();
 
-    app = moduleFixture.createNestApplication();
-    await app.init();
+    controller = moduleFixture.get(HealthController);
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  it('/health (GET)', async () => {
+    const result = await controller.check();
+    expect(result.status).toBe('ok');
+    expect(result.timestamp).toEqual(expect.any(String));
   });
 });

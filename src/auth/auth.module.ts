@@ -3,13 +3,15 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuditModule } from '../audit/audit.module';
-import { BusinessesModule } from '../businesses/businesses.module';
+import { BusinessModule } from '../business/business.module';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RefreshJwtAuthGuard } from './guards/refresh-jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
-import { JwtStrategy } from './strategies/jwt.strategy';
+import { AccessJwtStrategy } from './strategies/access-jwt.strategy';
+import { RefreshJwtStrategy } from './strategies/refresh-jwt.strategy';
 
 @Module({
   imports: [
@@ -17,19 +19,23 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('jwt.secret', { infer: true }),
-        signOptions: {
-          expiresIn: configService.get<string>('jwt.expiresIn', { infer: true }),
-        },
+      useFactory: (config: ConfigService) => ({
+        secret: config.get<string>('auth.accessSecret', { infer: true }),
       }),
     }),
     UsersModule,
-    BusinessesModule,
+    BusinessModule,
     AuditModule,
   ],
+  providers: [
+    AuthService,
+    AccessJwtStrategy,
+    RefreshJwtStrategy,
+    JwtAuthGuard,
+    RefreshJwtAuthGuard,
+    RolesGuard,
+  ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard, RolesGuard],
   exports: [JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}

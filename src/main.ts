@@ -1,17 +1,20 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import helmet from 'helmet';
-import { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { AuditService } from './audit/audit.service';
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
-  const configService = app.get(ConfigService);
-  const auditService = app.get(AuditService);
+  const config = app.get(ConfigService);
 
   app.use(helmet());
+  (
+    app.getHttpAdapter().getInstance() as {
+      set: (name: string, value: number) => void;
+    }
+  ).set('trust proxy', 1);
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -20,39 +23,37 @@ async function bootstrap() {
     }),
   );
 
-  app.setGlobalPrefix('api/v1');
+  app.setGlobalPrefix(config.get<string>('app.apiPrefix') ?? 'api/v1');
   app.enableCors({
-    origin: configService.get<string>('app.corsOrigin', { infer: true }),
+    origin: config.get<string>('app.corsOrigin') ?? '*',
     credentials: true,
   });
 
-  app.use((req: Request, res: Response, next) => {
-    res.on('finish', () => {
-      if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-        return;
-      }
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('Contract Platform API')
+    .setDescription('B2B contract lifecycle and payments API')
+    .setVersion('1.0.0')
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+      },
+      'JWT-auth',
+    )
+    .build();
 
-      const user = (req as Request & { user?: { sub?: string; businessId?: string } }).user;
-
-      void auditService.create({
-        action: `HTTP_${req.method}`,
-        resource: req.originalUrl,
-        userId: user?.sub ?? null,
-        businessId: user?.businessId ?? null,
-        ipAddress: req.ip,
-        userAgent: req.headers['user-agent'] ?? null,
-        metadata: {
-          statusCode: res.statusCode,
-        },
-      });
-    });
-
-    next();
+  const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('api/docs', app, swaggerDocument, {
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
   });
 
-  const port = configService.get<number>('app.port', { infer: true }) ?? 3000;
+  const port = config.get<number>('app.port') ?? 3000;
   await app.listen(port);
-  Logger.log(`API listening on port ${port}`);
+
+  Logger.log(`API started on port ${port}`);
 }
 
 void bootstrap();

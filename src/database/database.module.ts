@@ -1,22 +1,31 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { TypeOrmModuleOptions } from '@nestjs/typeorm';
+import { SnakeNamingStrategy } from './snake-naming.strategy';
 
 @Module({
   imports: [
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
+      useFactory: (config: ConfigService): TypeOrmModuleOptions => ({
         type: 'postgres',
-        host: configService.get<string>('database.host', { infer: true }),
-        port: configService.get<number>('database.port', { infer: true }),
-        username: configService.get<string>('database.username', { infer: true }),
-        password: configService.get<string>('database.password', { infer: true }),
-        database: configService.get<string>('database.name', { infer: true }),
-        synchronize: configService.get<boolean>('database.synchronize', { infer: true }),
-        logging: configService.get<boolean>('database.logging', { infer: true }),
+        host: config.get<string>('database.host') ?? 'localhost',
+        port: config.get<number>('database.port') ?? 5432,
+        username: config.get<string>('database.user') ?? 'postgres',
+        password: config.get<string>('database.password') ?? 'postgres',
+        database: config.get<string>('database.name') ?? 'contracts_platform',
+        ssl:
+          (config.get<boolean>('database.ssl') ?? false)
+            ? { rejectUnauthorized: false }
+            : false,
         autoLoadEntities: true,
+        synchronize: false,
+        namingStrategy: new SnakeNamingStrategy(),
+        migrationsRun: config.get<boolean>('database.migrationsRun') ?? false,
+        migrations: ['dist/database/migrations/*.js'],
+        logging: config.get<boolean>('database.logging') ?? false,
       }),
     }),
   ],

@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { REDIS_CLIENT } from '../common/constants/redis.constants';
+import { REDIS_CLIENT } from './redis.constants';
 import { RedisService } from './redis.service';
 
 @Global()
@@ -11,17 +11,18 @@ import { RedisService } from './redis.service';
     {
       provide: REDIS_CLIENT,
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) =>
+      useFactory: (config: ConfigService) =>
         new Redis({
-          host: configService.get<string>('redis.host', { infer: true }),
-          port: configService.get<number>('redis.port', { infer: true }),
-          password: configService.get<string>('redis.password', { infer: true }) || undefined,
-          lazyConnect: true,
+          host: config.get<string>('redis.host') ?? '127.0.0.1',
+          port: config.get<number>('redis.port') ?? 6379,
+          password: config.get<string>('redis.password'),
+          tls: (config.get<boolean>('redis.tls') ?? false) ? {} : undefined,
           maxRetriesPerRequest: 3,
+          lazyConnect: true,
         }),
     },
     RedisService,
   ],
-  exports: [REDIS_CLIENT, RedisService],
+  exports: [RedisService, REDIS_CLIENT],
 })
 export class RedisModule {}
